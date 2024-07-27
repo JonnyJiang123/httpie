@@ -1,12 +1,63 @@
+use anyhow::Ok;
 use clap::{arg, builder::OsStringValueParser, command, Parser};
-use reqwest::Url;
+use colored::*;
+use reqwest::{header::HeaderMap, Client, Response, Url};
 use std::collections::HashMap;
-
-fn main() {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let opts = Options::parse();
-    println!("{:?}", opts);
+    let client = Client::new();
+    let result = match opts.opts {
+        Method::Get(ref args) => get(client, args).await?,
+        Method::Post(ref args) => post(client, args).await?,
+    };
+    print_response(result).await?;
+    Ok(())
+}
+async fn print_response(res: Response) -> anyhow::Result<()> {
+    print_header(&res).await?;
+    print_headers(&res).await;
+    let headers = &res.headers().to_owned();
+    let body = res.text().await?;
+    print_body(headers.to_owned(), body).await?;
+    Ok(())
+}
+async fn print_header(res: &Response) -> anyhow::Result<()> {
+    let header = format!("{} {:?}", res.status(), res.version()).blue();
+    println!("{}", header);
+    Ok(())
+}
+async fn print_headers(resp: &Response) {
+    for (name, value) in resp.headers() {
+        println!("{}: {:?}", name.to_string().green(), value);
+    }
+    print!("\n");
+}
+async fn print_body(headers: HeaderMap, body: String) -> anyhow::Result<()> {
+    let mime: Option<mime::Mime> = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().parse().unwrap());
+    match mime {
+        Some(v) if v == mime::APPLICATION_JSON => {
+            println!("{}", jsonxf::pretty_print(&body).unwrap())
+        }
+        _ => println!("{}", body),
+    }
+    Ok(())
+}
+async fn get(client: Client, get: &Get) -> anyhow::Result<Response> {
+    let res = client.get(get.url.clone()).send().await?;
+    Ok(res)
 }
 
+async fn post(client: Client, post: &Post) -> anyhow::Result<Response> {
+    let res = client
+        .post(post.url.clone())
+        .json(&post.body)
+        .send()
+        .await?;
+    Ok(res)
+}
 #[derive(Parser, Debug, Clone)]
 #[command(version, about, long_about = None)]
 struct Options {
@@ -56,7 +107,7 @@ impl clap::builder::TypedValueParser for HashMapValueParser {
         let inner = OsStringValueParser::new().parse(cmd, arg, value.to_os_string())?;
         let val = inner.into_string();
         let mut map: HashMap<String, String> = HashMap::new();
-        if let Ok(content) = val {
+        if let std::result::Result::Ok(content) = val {
             content.split(",").for_each(|s| {
                 let mut kv = s.split("=");
                 if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
@@ -67,7 +118,7 @@ impl clap::builder::TypedValueParser for HashMapValueParser {
             return Err(clap::Error::new(clap::error::ErrorKind::InvalidValue));
         }
 
-        Ok(map)
+        std::result::Result::Ok(map)
     }
 }
 impl HashMapValueParser {
